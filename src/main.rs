@@ -83,9 +83,7 @@ pub fn quantum_gate_spawn_construct(
                 .spawn()
                 .insert(RASSupportCommander)
                 .insert(RAS_SACU_DAMAGE)
-                .insert(Engineering {
-                    build_rate: 56.0 * TICK_RATE,
-                })
+                .insert(RAS_SACU_ENGINEERING)
                 .insert(WillExecuteOnConstruct)
                 .insert(RAS_SACU_RESOURCE_PRODUCTION)
                 .insert(ResourceConsumer {
@@ -111,34 +109,49 @@ pub fn quantum_gate_spawn_construct(
 }
 
 pub fn construct_sacrifice(
-    mut query: Query<
-        (Entity, &Damage, &Sacrificing, &SacrificeCapable),
-        (With<Executing>, Without<ConstructionPaused>),
-    >,
-    mut target_query: Query<&mut Damage>,
+    mut param_set: ParamSet<(
+        Query<
+            (Entity, &Damage, &Sacrificing, &SacrificeCapable),
+            (With<Executing>, Without<ConstructionPaused>),
+        >,
+        Query<&mut Damage>,
+    )>,
     mut commands: Commands,
 ) {
-    for (entity, damage, sacrificing, sacrifice_capability) in &mut query {
-        if let Ok(mut target_damage) = target_query.get_mut(sacrificing.target) {
+    struct SacrificeInfo {
+        source_entity: Entity,
+        mass_available: f64,
+        energy_available: f64,
+        target_entity: Entity,
+    }
+    // i will have to... allocate
+    let mut sacrifice_list: Vec<SacrificeInfo> = Vec::new();
+    for (entity, damage, sacrificing, sacrifice_capability) in &mut param_set.p0() {
+        sacrifice_list.push(SacrificeInfo {
+            source_entity: entity,
+            mass_available: damage.mass_total * damage.health * sacrifice_capability.mass_efficiency,
+            energy_available: damage.energy_total * damage.health * sacrifice_capability.energy_efficiency,
+            target_entity: sacrificing.target,
+        });
+    }
+    let mut target_query = param_set.p1();
+    for sacrificing in &mut sacrifice_list {
+        if let Ok(mut target_damage) = target_query.get_mut(sacrificing.target_entity) {
             if target_damage.health >= 1.0 {
                 // target finished
-                commands.entity(entity).remove::<Sacrificing>();
+                commands.entity(sacrificing.source_entity).remove::<Sacrificing>();
                 continue;
             } else {
                 // contribute build and despawn self
-                let mass_available =
-                    damage.mass_total * damage.health * sacrifice_capability.mass_efficiency;
-                let energy_available =
-                    damage.energy_total * damage.health * sacrifice_capability.energy_efficiency;
                 target_damage.health += f64::min(
-                    mass_available / target_damage.mass_total,
-                    energy_available / target_damage.energy_total,
+                    sacrificing.mass_available / target_damage.mass_total,
+                    sacrificing.energy_available / target_damage.energy_total,
                 );
-                commands.entity(entity).despawn();
+                commands.entity(sacrificing.source_entity).despawn();
             }
         } else {
             // target gone
-            commands.entity(entity).remove::<Sacrificing>();
+            commands.entity(sacrificing.source_entity).remove::<Sacrificing>();
         }
     }
 }
@@ -155,12 +168,9 @@ impl RASSimulation {
         // resources
         world.insert_resource(CurrentTick(0));
         world.insert_resource(Economy {
-            mass: 0.0,
-            energy: 0.0,
             mass_capacity: 4000.0,
             energy_capacity: 100000.0,
-            mass_stall: 1.0,
-            energy_stall: 1.0,
+            ..Default::default()
         });
         world.insert_resource(LogHandler::new(|message| println!("{}", message)));
 
@@ -194,6 +204,8 @@ impl RASSimulation {
 
     pub fn run(&mut self) {
         self.update_schedule.run(&mut self.world);
+        let economy = self.world.get_resource::<Economy>().unwrap();
+        println!("economy: {:?}", economy);
     }
 }
 

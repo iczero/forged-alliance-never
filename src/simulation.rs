@@ -6,6 +6,7 @@ pub const TICK_RATE: f64 = 10.0;
 pub const EPSILON: f64 = 1e-6;
 
 /// FA resource economy
+#[derive(Debug)]
 pub struct Economy {
     /// current available mass
     pub mass: f64,
@@ -19,6 +20,37 @@ pub struct Economy {
     pub mass_stall: f64,
     /// energy stall ratio
     pub energy_stall: f64,
+    /// total mass production
+    pub mass_produced: f64,
+    /// total energy production
+    pub energy_produced: f64,
+    /// total mass requests
+    pub mass_requested: f64,
+    /// total energy requests
+    pub energy_requested: f64,
+    /// total mass consumed
+    pub mass_consumed: f64,
+    /// total energy consumed
+    pub energy_consumed: f64,
+}
+
+impl Default for Economy {
+    fn default() -> Self {
+        Economy {
+            mass: 0.0,
+            energy: 0.0,
+            mass_capacity: 4000.0,
+            energy_capacity: 100000.0,
+            mass_stall: 1.0,
+            energy_stall: 1.0,
+            mass_produced: 0.0,
+            energy_produced: 0.0,
+            mass_requested: 0.0,
+            energy_requested: 0.0,
+            mass_consumed: 0.0,
+            energy_consumed: 0.0,
+        }
+    }
 }
 
 /// Tick counter
@@ -126,6 +158,8 @@ pub fn economy_resource_producers(
     }
     economy.mass = f64::min(economy.mass_capacity, economy.mass + total_mass);
     economy.energy = f64::min(economy.energy_capacity, economy.energy + total_energy);
+    economy.mass_produced = total_mass;
+    economy.energy_produced = total_energy;
 }
 
 pub fn economy_process_resource_requests(
@@ -141,6 +175,8 @@ pub fn economy_process_resource_requests(
 
     economy.mass_stall = f64::min(1.0, economy.mass / total_mass_requested);
     economy.energy_stall = f64::min(1.0, economy.energy / total_energy_requested);
+    economy.mass_requested = total_mass_requested;
+    economy.energy_requested = total_energy_requested;
 }
 
 pub fn economy_process_resource_consumption(
@@ -162,6 +198,8 @@ pub fn economy_process_resource_consumption(
 
     economy.mass -= total_mass_consumed;
     economy.energy -= total_energy_consumed;
+    economy.mass_consumed = total_mass_consumed;
+    economy.energy_consumed = total_energy_consumed;
 
     if economy.mass < -1.0 || economy.energy < -1.0 {
         (log_handler.emit)(format!(
@@ -289,12 +327,9 @@ impl FASimulation {
         // resources
         world.insert_resource(CurrentTick(0));
         world.insert_resource(Economy {
-            mass: 0.0,
-            energy: 0.0,
             mass_capacity: 4000.0,
             energy_capacity: 100000.0,
-            mass_stall: 1.0,
-            energy_stall: 1.0,
+            ..Default::default()
         });
         world.insert_resource(LogHandler::new(|message| println!("{}", message)));
 
