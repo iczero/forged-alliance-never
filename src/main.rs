@@ -13,9 +13,12 @@ const PARAGON_DAMAGE: Damage = Damage {
 };
 /// total resource cost to build sacrifice-enabled RAS SACU
 const RAS_SACU_DAMAGE: Damage = Damage {
-    mass_total: 6_600.0,
-    energy_total: 119_600.0,
-    build_time: 23_500.0,
+    // mass_total: 6_600.0,
+    // energy_total: 119_600.0,
+    mass_total: 6_450.0,
+    energy_total: 117_100.0,
+    // build_time: 23_500.0,
+    build_time: 22_800.0,
     health: 0.0,
     health_points: 15_000,
 };
@@ -41,6 +44,12 @@ pub struct QuantumGate {
     // bundle for new unit
     // this unfortunately does not work
     // unit_bundle: Box<dyn Bundle>
+}
+
+impl Default for QuantumGate {
+    fn default() -> Self {
+        QuantumGate { rolloff_time: 0 }
+    }
 }
 
 #[derive(Component)]
@@ -129,8 +138,12 @@ pub fn construct_sacrifice(
     for (entity, damage, sacrificing, sacrifice_capability) in &mut param_set.p0() {
         sacrifice_list.push(SacrificeInfo {
             source_entity: entity,
-            mass_available: damage.mass_total * damage.health * sacrifice_capability.mass_efficiency,
-            energy_available: damage.energy_total * damage.health * sacrifice_capability.energy_efficiency,
+            mass_available: damage.mass_total
+                * damage.health
+                * sacrifice_capability.mass_efficiency,
+            energy_available: damage.energy_total
+                * damage.health
+                * sacrifice_capability.energy_efficiency,
             target_entity: sacrificing.target,
         });
     }
@@ -139,7 +152,9 @@ pub fn construct_sacrifice(
         if let Ok(mut target_damage) = target_query.get_mut(sacrificing.target_entity) {
             if target_damage.health >= 1.0 {
                 // target finished
-                commands.entity(sacrificing.source_entity).remove::<Sacrificing>();
+                commands
+                    .entity(sacrificing.source_entity)
+                    .remove::<Sacrificing>();
                 continue;
             } else {
                 // contribute build and despawn self
@@ -151,7 +166,9 @@ pub fn construct_sacrifice(
             }
         } else {
             // target gone
-            commands.entity(sacrificing.source_entity).remove::<Sacrificing>();
+            commands
+                .entity(sacrificing.source_entity)
+                .remove::<Sacrificing>();
         }
     }
 }
@@ -204,13 +221,54 @@ impl RASSimulation {
 
     pub fn run(&mut self) {
         self.update_schedule.run(&mut self.world);
+    }
+
+    pub fn print_economy(&mut self) {
         let economy = self.world.get_resource::<Economy>().unwrap();
-        println!("economy: {:?}", economy);
+        println!("Economy info:");
+        println!(
+            "  Mass: {:.2}/{} +{:.4} -{:.4} (stall {:.5}, actual {:+.4})",
+            economy.mass,
+            economy.mass_capacity,
+            economy.mass_produced,
+            economy.mass_requested,
+            economy.mass_stall,
+            economy.mass_produced - economy.mass_consumed
+        );
+        println!(
+            "  Energy: {:.2}/{} +{:.4} -{:.4} (stall {:.5}, actual {:+.4})",
+            economy.energy,
+            economy.energy_capacity,
+            economy.energy_produced,
+            economy.energy_requested,
+            economy.energy_stall,
+            economy.energy_produced - economy.energy_consumed
+        );
     }
 }
 
 fn main() {
     println!("Hello, world!");
     let mut sim = RASSimulation::new();
-    sim.run();
+
+    let gate = sim.world.spawn()
+        .insert(QuantumGate::default())
+        .insert(Executing)
+        .insert(ResourceConsumer::default())
+        .insert(Engineering { build_rate: 1200.0 })
+        .id();
+
+    let resource_producer = sim.world.spawn()
+        .insert(ResourceProducer {
+            mass_yield: 200.0,
+            energy_yield: 3_800.0,
+        })
+        .insert(Executing)
+        .id();
+
+    for _ in 0..5 {
+        sim.run();
+        println!("Tick {}", sim.world.get_resource::<CurrentTick>().unwrap().0);
+        sim.print_economy();
+    }
 }

@@ -104,6 +104,17 @@ pub struct ResourceConsumer {
     pub energy_consumed: f64,
 }
 
+impl Default for ResourceConsumer {
+    fn default() -> Self {
+        ResourceConsumer {
+            mass_request: 0.0,
+            energy_request: 0.0,
+            mass_consumed: 0.0,
+            energy_consumed: 0.0,
+        }
+    }
+}
+
 /// Entity can be damaged
 #[derive(Component)]
 pub struct Damage {
@@ -274,30 +285,21 @@ pub fn do_construct(
                 continue;
             }
             // determine resource usage
-            let target_resource_ratio = target_damage.mass_total / target_damage.energy_total;
+            // resources available to use
             let mass_available = constructing.mass_requested * economy.mass_stall;
-            let energy_available = constructing.energy_requested * economy.mass_stall;
-            let available_resource_ratio = mass_available / energy_available;
-            let mass_used;
-            let energy_used;
-            if target_resource_ratio < available_resource_ratio {
-                // more mass than energy, limit based off energy
-                mass_used = energy_available * target_resource_ratio;
-                energy_used = energy_available;
-            } else if target_resource_ratio == available_resource_ratio {
-                // not sure if this will ever happen due to floats
-                mass_used = mass_available;
-                energy_used = energy_available;
-            } else
-            /* target_resource_ratio > available_resource_ratio */
-            {
-                // more energy than mass, limit based off mass
-                mass_used = mass_available;
-                energy_used = energy_available / target_resource_ratio;
-            }
-            let mass_remaining = (1.0 - target_damage.health) * target_damage.mass_total;
-            if mass_remaining <= mass_used {
+            let energy_available = constructing.energy_requested * economy.energy_stall;
+            // determine resource bottleneck
+            let min_portion = f64::min(
+                mass_available / target_damage.mass_total,
+                energy_available / target_damage.energy_total
+            );
+            // calculate total used
+            let mass_used = min_portion * target_damage.mass_total;
+            let energy_used = min_portion * target_damage.energy_total;
+
+            if target_damage.health + min_portion >= 1.0 {
                 // allocation would overflow target total mass/energy cost
+                let mass_remaining = (1.0 - target_damage.health) * target_damage.mass_total;
                 let energy_remaining = (1.0 - target_damage.health) * target_damage.energy_total;
                 resource_consumer.mass_consumed += mass_remaining;
                 resource_consumer.energy_consumed += energy_remaining;
@@ -309,7 +311,7 @@ pub fn do_construct(
                 resource_consumer.mass_consumed += mass_used;
                 resource_consumer.energy_consumed += energy_used;
                 // apply construction progress
-                target_damage.health += mass_used / target_damage.mass_total;
+                target_damage.health += min_portion;
             }
         }
     }
