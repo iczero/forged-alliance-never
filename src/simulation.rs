@@ -87,6 +87,21 @@ pub struct ResourceProducer {
     pub mass_yield: f64,
     /// energy produced per tick
     pub energy_yield: f64,
+    /// total mass produced
+    pub total_mass: f64,
+    /// total energy produced
+    pub total_energy: f64,
+}
+
+impl Default for ResourceProducer {
+    fn default() -> Self {
+        ResourceProducer {
+            mass_yield: 0.0,
+            energy_yield: 0.0,
+            total_mass: 0.0,
+            total_energy: 0.0,
+        }
+    }
 }
 
 /// Entity consumes resources
@@ -162,17 +177,19 @@ pub fn count_tick(mut tick_counter: ResMut<CurrentTick>) {
 
 /// resource production accounting
 pub fn economy_resource_producers(
-    query: Query<&ResourceProducer, With<Executing>>,
+    mut query: Query<&mut ResourceProducer, With<Executing>>,
     mut economy: ResMut<Economy>,
 ) {
     let mut total_mass = 0.0;
     let mut total_energy = 0.0;
-    for producer in &query {
+    for mut producer in &mut query {
         total_mass += producer.mass_yield;
         total_energy += producer.energy_yield;
+        producer.total_mass += producer.mass_yield;
+        producer.total_energy += producer.energy_yield;
     }
-    economy.mass = f64::min(economy.mass_capacity, economy.mass + total_mass);
-    economy.energy = f64::min(economy.energy_capacity, economy.energy + total_energy);
+    economy.mass += total_mass;
+    economy.energy += total_energy;
     economy.mass_produced = total_mass;
     economy.energy_produced = total_energy;
 }
@@ -211,8 +228,11 @@ pub fn economy_process_resource_consumption(
         consumer.energy_request = 0.0;
     }
 
-    economy.mass -= total_mass_consumed;
-    economy.energy -= total_energy_consumed;
+    economy.mass = f64::min(economy.mass_capacity, economy.mass - total_mass_consumed);
+    economy.energy = f64::min(
+        economy.energy_capacity,
+        economy.energy - total_energy_consumed,
+    );
     economy.mass_consumed = total_mass_consumed;
     economy.energy_consumed = total_energy_consumed;
 

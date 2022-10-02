@@ -26,6 +26,8 @@ const RAS_SACU_DAMAGE: Damage = Damage {
 const RAS_SACU_RESOURCE_PRODUCTION: ResourceProducer = ResourceProducer {
     mass_yield: 11.0 / TICK_RATE,
     energy_yield: 1_020.0 / TICK_RATE,
+    total_mass: 0.0,
+    total_energy: 0.0,
 };
 /// RAS SACU sacrifice
 const RAS_SACU_SACRIFICE: SacrificeCapable = SacrificeCapable {
@@ -52,7 +54,7 @@ impl Default for QuantumGate {
     fn default() -> Self {
         QuantumGate {
             rolloff_time: 15,
-            rolloff_current: 0
+            rolloff_current: 0,
         }
     }
 }
@@ -169,6 +171,7 @@ pub fn construct_sacrifice(
                     sacrificing.mass_available / target_damage.mass_total,
                     sacrificing.energy_available / target_damage.energy_total,
                 );
+                target_damage.health = target_damage.health.min(1.0);
                 commands.entity(sacrificing.source_entity).despawn();
             }
         } else {
@@ -230,26 +233,37 @@ impl RASSimulation {
         self.update_schedule.run(&mut self.world);
     }
 
-    pub fn print_economy(&mut self) {
+    pub fn get_tick(&self) -> u64 {
+        self.world.get_resource::<CurrentTick>().unwrap().0
+    }
+
+    pub fn print_tick(&self) {
+        println!(
+            "Tick {}",
+            self.world.get_resource::<CurrentTick>().unwrap().0
+        );
+    }
+
+    pub fn print_economy(&self) {
         let economy = self.world.get_resource::<Economy>().unwrap();
         println!("Economy info:");
         println!(
             "  Mass: {:.2}/{} +{:.4} -{:.4} (stall {:.5}, actual {:+.4})",
             economy.mass,
             economy.mass_capacity,
-            economy.mass_produced,
-            economy.mass_requested,
+            economy.mass_produced * TICK_RATE,
+            economy.mass_requested * TICK_RATE,
             economy.mass_stall,
-            economy.mass_produced - economy.mass_consumed
+            (economy.mass_produced - economy.mass_consumed) * TICK_RATE
         );
         println!(
             "  Energy: {:.2}/{} +{:.4} -{:.4} (stall {:.5}, actual {:+.4})",
             economy.energy,
             economy.energy_capacity,
-            economy.energy_produced,
-            economy.energy_requested,
+            economy.energy_produced * TICK_RATE,
+            economy.energy_requested * TICK_RATE,
             economy.energy_stall,
-            economy.energy_produced - economy.energy_consumed
+            (economy.energy_produced - economy.energy_consumed) * TICK_RATE
         );
     }
 }
@@ -258,6 +272,18 @@ fn main() {
     println!("Hello, world!");
     let mut sim = RASSimulation::new();
 
+    let args = std::env::args().collect::<Vec<String>>();
+    let target_count = args
+        .get(1)
+        .expect("requires sacu count")
+        .parse::<u32>()
+        .expect("invalid number");
+    let mass_yield = args
+        .get(2)
+        .expect("requires initial mass income")
+        .parse::<f64>()
+        .expect("invalid number");
+
     let gate = sim
         .world
         .spawn()
@@ -265,7 +291,7 @@ fn main() {
         .insert(Executing)
         .insert(ResourceConsumer::default())
         .insert(Engineering {
-            build_rate: 120000.0,
+            build_rate: 120000.0 / TICK_RATE,
         })
         .id();
 
@@ -273,19 +299,20 @@ fn main() {
         .world
         .spawn()
         .insert(ResourceProducer {
-            mass_yield: 200.0,
-            energy_yield: 3_800.0,
+            mass_yield: mass_yield / TICK_RATE,
+            energy_yield: 100_000.0 / TICK_RATE,
+            ..Default::default()
         })
         .insert(Executing)
         .id();
 
-    let mut sacu_query = sim.world.query::<&RASSupportCommander>();
-    for _ in 0..1000 {
+    // construct sacus
+    let mut sacu_query = sim
+        .world
+        .query_filtered::<Entity, (With<RASSupportCommander>, With<Executing>)>();
+    loop {
         sim.run();
-        println!(
-            "Tick {}",
-            sim.world.get_resource::<CurrentTick>().unwrap().0
-        );
+        sim.print_tick();
         if let Some(constructing) = sim.world.entity(gate).get::<Constructing>() {
             println!(
                 "Quantum gate constructing entity id {}",
@@ -301,5 +328,89 @@ fn main() {
         }
         println!("There are currently {} SACUs", sacu_count);
         sim.print_economy();
+        if sacu_count >= target_count {
+            // run until target number of sacus
+            break;
+        }
     }
+
+    // stop gate
+    sim.world.entity_mut(gate).remove::<Executing>();
+    // create paragon
+    let paragon = sim
+        .world
+        .spawn()
+        .insert(PARAGON_DAMAGE)
+        .insert(Paragon)
+        .id();
+    // construct paragon
+    let sacus: Vec<Entity> = sacu_query.iter(&sim.world).collect();
+    let sacu_count = sacus.len();
+    for entity in sacus {
+        sim.world.entity_mut(entity).insert(Constructing {
+            target: paragon,
+            build_amount: 0.0,
+            energy_consumption_multiplier: 1.0,
+            energy_requested: 0.0,
+            mass_consumption_multiplier: 1.0,
+            mass_requested: 0.0,
+        });
+    }
+
+    let sacrifice_portion = f64::min(
+        RAS_SACU_DAMAGE.mass_total * RAS_SACU_SACRIFICE.mass_efficiency / PARAGON_DAMAGE.mass_total,
+        RAS_SACU_DAMAGE.energy_total * RAS_SACU_SACRIFICE.energy_efficiency
+            / PARAGON_DAMAGE.energy_total,
+    );
+    let sacrifice_point = 1.0 - sacu_count as f64 * sacrifice_portion;
+    assert!(sacrifice_point < 1.0);
+    // wait until close to sacrifice point
+    loop {
+        sim.run();
+        sim.print_tick();
+        sim.print_economy();
+        if let Some(damage) = sim.world.entity(paragon).get::<Damage>() {
+            println!("  Paragon build progress: {:.2}%", damage.health * 100.0);
+            if damage.health >= sacrifice_point {
+                break;
+            }
+        }
+    }
+
+    let mut sacu_res_query = sim
+        .world
+        .query_filtered::<&ResourceProducer, (With<RASSupportCommander>, With<Executing>)>();
+    println!("SACU resource production totals");
+    let mut mass_total = 0.0;
+    let mut energy_total = 0.0;
+    for res in sacu_res_query.iter(&sim.world) {
+        mass_total += res.total_mass;
+        energy_total += res.total_energy;
+        println!("  mass: {:.2}, energy: {:.2}", res.total_mass, res.total_energy);
+    }
+    println!("total mass: {:.2}", mass_total);
+    println!("total energy: {:.2}", energy_total);
+
+    // sacrifice sacus
+    println!("Sacrificing");
+    let sacus: Vec<Entity> = sacu_query.iter(&sim.world).collect();
+    for entity in sacus {
+        let mut handle = sim.world.entity_mut(entity);
+        handle.remove::<Constructing>();
+        handle.insert(Sacrificing { target: paragon });
+    }
+
+    sim.run();
+    sim.print_tick();
+    sim.print_economy();
+    if let Some(damage) = sim.world.entity(paragon).get::<Damage>() {
+        println!("  Paragon build progress: {:.2}%", damage.health * 100.0);
+    }
+
+    let tick = sim.get_tick();
+    println!("Total time: {} minutes", tick as f64 / 10. / 60.);
+    println!(
+        "Time to build paragon directly: {} minutes",
+        PARAGON_DAMAGE.mass_total / mass_yield / 60.
+    );
 }
