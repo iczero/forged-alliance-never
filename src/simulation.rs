@@ -146,6 +146,10 @@ pub struct Constructing {
     pub mass_requested: f64,
     /// energy requested for construction
     pub energy_requested: f64,
+    /// mass consumption multiplier (example: 0.9 if adjacency bonus)
+    pub mass_consumption_multiplier: f64,
+    /// energy consumption multiplier
+    pub energy_consumption_multiplier: f64,
     /// proportion of unit that would be completed this tick by this unit if no stall
     pub build_amount: f64,
 }
@@ -256,8 +260,11 @@ pub fn do_construct_resources_request(
         if let Ok(target_damage) = target_query.get_mut(constructing.target) {
             let build_amount = engineering.build_rate / target_damage.build_time;
             constructing.build_amount = build_amount;
-            constructing.mass_requested = build_amount * target_damage.mass_total;
-            constructing.energy_requested = build_amount * target_damage.energy_total;
+            constructing.mass_requested =
+                build_amount * target_damage.mass_total * constructing.mass_consumption_multiplier;
+            constructing.energy_requested = build_amount
+                * target_damage.energy_total
+                * constructing.energy_consumption_multiplier;
             resource_consumer.mass_request += constructing.mass_requested;
             resource_consumer.energy_request += constructing.energy_requested;
         } else {
@@ -286,23 +293,30 @@ pub fn do_construct(
             }
             // determine resource usage
             // resources available to use
-            let mass_available = constructing.mass_requested * economy.mass_stall;
-            let energy_available = constructing.energy_requested * economy.energy_stall;
+            let mass_available = constructing.mass_requested * economy.mass_stall
+                / constructing.mass_consumption_multiplier;
+            let energy_available = constructing.energy_requested * economy.energy_stall
+                / constructing.energy_consumption_multiplier;
             // determine resource bottleneck
             let min_portion = f64::min(
                 mass_available / target_damage.mass_total,
-                energy_available / target_damage.energy_total
+                energy_available / target_damage.energy_total,
             );
             // calculate total used
-            let mass_used = min_portion * target_damage.mass_total;
-            let energy_used = min_portion * target_damage.energy_total;
+            let mass_used =
+                min_portion * target_damage.mass_total * constructing.mass_consumption_multiplier;
+            let energy_used = min_portion
+                * target_damage.energy_total
+                * constructing.energy_consumption_multiplier;
 
             if target_damage.health + min_portion >= 1.0 {
                 // allocation would overflow target total mass/energy cost
                 let mass_remaining = (1.0 - target_damage.health) * target_damage.mass_total;
                 let energy_remaining = (1.0 - target_damage.health) * target_damage.energy_total;
-                resource_consumer.mass_consumed += mass_remaining;
-                resource_consumer.energy_consumed += energy_remaining;
+                resource_consumer.mass_consumed +=
+                    mass_remaining * constructing.mass_consumption_multiplier;
+                resource_consumer.energy_consumed +=
+                    energy_remaining * constructing.energy_consumption_multiplier;
                 // target is done
                 target_damage.health = 1.0;
                 commands.entity(entity).remove::<Constructing>();

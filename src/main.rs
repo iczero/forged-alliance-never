@@ -41,6 +41,8 @@ const RAS_SACU_ENGINEERING: Engineering = Engineering {
 pub struct QuantumGate {
     /// time (in ticks) for unit being constructed to exit the factory
     pub rolloff_time: i32,
+    /// time (in ticks) left for unit to leave
+    pub rolloff_current: i32,
     // bundle for new unit
     // this unfortunately does not work
     // unit_bundle: Box<dyn Bundle>
@@ -48,7 +50,10 @@ pub struct QuantumGate {
 
 impl Default for QuantumGate {
     fn default() -> Self {
-        QuantumGate { rolloff_time: 0 }
+        QuantumGate {
+            rolloff_time: 15,
+            rolloff_current: 0
+        }
     }
 }
 
@@ -81,12 +86,12 @@ pub fn quantum_gate_spawn_construct(
     mut commands: Commands,
 ) {
     for (entity, mut quantum_gate) in &mut query {
-        if quantum_gate.rolloff_time > 0 {
+        if quantum_gate.rolloff_current > 0 {
             // tick rolloff
-            quantum_gate.rolloff_time -= 1;
+            quantum_gate.rolloff_current -= 1;
             continue;
-        } else if quantum_gate.rolloff_time == 0 {
-            quantum_gate.rolloff_time = -1;
+        } else if quantum_gate.rolloff_current == 0 {
+            quantum_gate.rolloff_current = -1;
             // spawn new RAS SACU and begin construction
             let construct_target = commands
                 .spawn()
@@ -109,10 +114,12 @@ pub fn quantum_gate_spawn_construct(
                 build_amount: 0.0,
                 mass_requested: 0.0,
                 energy_requested: 0.0,
+                mass_consumption_multiplier: 1.0,
+                energy_consumption_multiplier: 1.0,
             });
         } else {
             // construction finished or cancelled
-            quantum_gate.rolloff_time = 20;
+            quantum_gate.rolloff_current = quantum_gate.rolloff_time;
         }
     }
 }
@@ -185,7 +192,7 @@ impl RASSimulation {
         // resources
         world.insert_resource(CurrentTick(0));
         world.insert_resource(Economy {
-            mass_capacity: 4000.0,
+            mass_capacity: 40000.0,
             energy_capacity: 100000.0,
             ..Default::default()
         });
@@ -251,14 +258,20 @@ fn main() {
     println!("Hello, world!");
     let mut sim = RASSimulation::new();
 
-    let gate = sim.world.spawn()
+    let gate = sim
+        .world
+        .spawn()
         .insert(QuantumGate::default())
         .insert(Executing)
         .insert(ResourceConsumer::default())
-        .insert(Engineering { build_rate: 1200.0 })
+        .insert(Engineering {
+            build_rate: 120000.0,
+        })
         .id();
 
-    let resource_producer = sim.world.spawn()
+    let _resource_producer = sim
+        .world
+        .spawn()
         .insert(ResourceProducer {
             mass_yield: 200.0,
             energy_yield: 3_800.0,
@@ -266,9 +279,27 @@ fn main() {
         .insert(Executing)
         .id();
 
-    for _ in 0..5 {
+    let mut sacu_query = sim.world.query::<&RASSupportCommander>();
+    for _ in 0..1000 {
         sim.run();
-        println!("Tick {}", sim.world.get_resource::<CurrentTick>().unwrap().0);
+        println!(
+            "Tick {}",
+            sim.world.get_resource::<CurrentTick>().unwrap().0
+        );
+        if let Some(constructing) = sim.world.entity(gate).get::<Constructing>() {
+            println!(
+                "Quantum gate constructing entity id {}",
+                constructing.target.id()
+            );
+            if let Some(damage) = sim.world.entity(constructing.target).get::<Damage>() {
+                println!("  Build progress: {:.2}%", damage.health * 100.0);
+            }
+        }
+        let mut sacu_count = 0;
+        for _ in sacu_query.iter(&sim.world) {
+            sacu_count += 1;
+        }
+        println!("There are currently {} SACUs", sacu_count);
         sim.print_economy();
     }
 }
